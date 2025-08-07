@@ -3,5 +3,5 @@ services:
     name: youtube-transcript-api
     env: python
     plan: free
-    buildCommand: ""
-    startCommand: waitress-serve --port=8080 app:app
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
