@@ -16,38 +16,72 @@ LAST_PROXY_UPDATE = 0
 PROXY_UPDATE_INTERVAL = 3600  # Update proxies every hour
 
 def get_free_proxies():
-    """Fetch free proxy list from multiple sources"""
+    """Fetch free proxy list from multiple sources with better filtering"""
     proxies = []
     
-    # Source 1: ProxyScrape API
+    # Source 1: ProxyScrape API (Elite proxies)
     try:
         response = requests.get(
-            "https://api.proxyscrape.com/v2/?request=get&format=textplain&protocol=http&timeout=10000&country=all",
-            timeout=10
+            "https://api.proxyscrape.com/v2/?request=get&format=textplain&protocol=http&timeout=5000&country=US,CA,GB,DE,FR&anonymity=elite",
+            timeout=15
         )
         if response.status_code == 200:
             proxy_list = response.text.strip().split('\n')
-            for proxy in proxy_list[:20]:  # Limit to first 20
-                if ':' in proxy.strip():
-                    proxies.append(proxy.strip())
-    except:
-        pass
+            for proxy in proxy_list[:30]:  # Increased limit
+                proxy = proxy.strip()
+                if ':' in proxy and len(proxy.split(':')) == 2:
+                    proxies.append(proxy)
+    except Exception as e:
+        print(f"ProxyScrape failed: {e}")
     
-    # Source 2: Free Proxy List
+    # Source 2: Alternative source with different format
     try:
         response = requests.get(
-            "https://www.proxy-list.download/api/v1/get?type=http",
-            timeout=10
+            "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+            timeout=15
         )
         if response.status_code == 200:
             proxy_list = response.text.strip().split('\n')
-            for proxy in proxy_list[:10]:  # Limit to first 10
-                if ':' in proxy.strip():
-                    proxies.append(proxy.strip())
-    except:
-        pass
+            for proxy in proxy_list[:20]:
+                proxy = proxy.strip()
+                if ':' in proxy and len(proxy.split(':')) == 2:
+                    proxies.append(proxy)
+    except Exception as e:
+        print(f"GitHub proxy source failed: {e}")
     
-    return list(set(proxies))  # Remove duplicates
+    # Source 3: Free Proxy List with country filter
+    try:
+        response = requests.get(
+            "https://www.proxy-list.download/api/v1/get?type=http&anon=elite&country=US",
+            timeout=15
+        )
+        if response.status_code == 200:
+            proxy_list = response.text.strip().split('\n')
+            for proxy in proxy_list[:15]:
+                proxy = proxy.strip()
+                if ':' in proxy and len(proxy.split(':')) == 2:
+                    proxies.append(proxy)
+    except Exception as e:
+        print(f"Proxy-list.download failed: {e}")
+    
+    # Remove duplicates and validate format
+    unique_proxies = []
+    seen = set()
+    for proxy in proxies:
+        if proxy not in seen and len(proxy.split(':')) == 2:
+            try:
+                ip, port = proxy.split(':')
+                # Basic IP validation
+                parts = ip.split('.')
+                if len(parts) == 4 and all(0 <= int(part) <= 255 for part in parts):
+                    if 1 <= int(port) <= 65535:
+                        unique_proxies.append(proxy)
+                        seen.add(proxy)
+            except:
+                continue
+    
+    print(f"Collected {len(unique_proxies)} unique valid proxies")
+    return unique_proxies
 
 def update_proxy_list():
     """Update the global proxy list if needed"""
@@ -68,16 +102,54 @@ def get_random_proxy():
     return None
 
 def test_proxy(proxy):
-    """Test if a proxy is working"""
+    """Test if a proxy is working with multiple test endpoints"""
+    test_urls = [
+        "http://httpbin.org/ip",
+        "http://icanhazip.com",
+        "https://api.ipify.org?format=json"
+    ]
+    
+    proxy_dict = {
+        "http": f"http://{proxy}",
+        "https": f"http://{proxy}"
+    }
+    
+    for test_url in test_urls:
+        try:
+            response = requests.get(
+                test_url, 
+                proxies=proxy_dict, 
+                timeout=8,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+            )
+            if response.status_code == 200:
+                return True
+        except Exception as e:
+            continue
+    return False
+
+def test_proxy_with_youtube(proxy):
+    """Test proxy specifically with YouTube-like request"""
     try:
         proxy_dict = {
             "http": f"http://{proxy}",
             "https": f"http://{proxy}"
         }
+        
+        # Test with a simple YouTube page request (not transcript API)
         response = requests.get(
-            "http://httpbin.org/ip", 
-            proxies=proxy_dict, 
-            timeout=10
+            "https://www.youtube.com/robots.txt",
+            proxies=proxy_dict,
+            timeout=10,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
         )
         return response.status_code == 200
     except:
@@ -98,7 +170,8 @@ def home():
         "endpoints": {
             "/transcript": "Get YouTube video transcript",
             "/health": "Service health check",
-            "/proxy-status": "Check proxy system status"
+            "/proxy-status": "Check proxy system status",
+            "/test-videos": "Get recommended video IDs for testing"
         },
         "note": "This service automatically tries proxies if direct connection fails",
         "suggestions": [
@@ -123,19 +196,61 @@ def proxy_status():
     
     # Test a few proxies
     working_proxies = 0
+    youtube_working_proxies = 0
     if PROXY_LIST:
-        test_sample = PROXY_LIST[:5]  # Test first 5 proxies
+        test_sample = PROXY_LIST[:10]  # Test first 10 proxies
         for proxy in test_sample:
             if test_proxy(proxy):
                 working_proxies += 1
+                if test_proxy_with_youtube(proxy):
+                    youtube_working_proxies += 1
     
     return jsonify({
         "total_proxies": len(PROXY_LIST),
-        "tested_proxies": min(5, len(PROXY_LIST)),
+        "tested_proxies": min(10, len(PROXY_LIST)),
         "working_proxies": working_proxies,
+        "youtube_working_proxies": youtube_working_proxies,
         "proxy_system": "enabled" if PROXY_LIST else "no_proxies_available",
         "last_update": LAST_PROXY_UPDATE,
-        "next_update": LAST_PROXY_UPDATE + PROXY_UPDATE_INTERVAL
+        "next_update": LAST_PROXY_UPDATE + PROXY_UPDATE_INTERVAL,
+        "recommendation": "youtube_working_proxies > 0" if youtube_working_proxies > 0 else "try_different_videos"
+    })
+
+@app.route('/test-videos')
+def test_videos():
+    """Get a list of video IDs that often work for testing"""
+    test_video_ids = [
+        {
+            "id": "dQw4w9WgXcQ",
+            "title": "Rick Astley - Never Gonna Give You Up",
+            "type": "music",
+            "success_rate": "high"
+        },
+        {
+            "id": "jNQXAC9IVRw", 
+            "title": "Me at the zoo (First YouTube video)",
+            "type": "historical",
+            "success_rate": "high"
+        },
+        {
+            "id": "kN0TVp6piTg",
+            "title": "TED Talk sample",
+            "type": "educational",
+            "success_rate": "very_high"
+        },
+        {
+            "id": "M7lc1UVf-VE",
+            "title": "YouTube Rewind sample",
+            "type": "youtube_original",
+            "success_rate": "medium"
+        }
+    ]
+    
+    return jsonify({
+        "message": "Test these video IDs for better success rates",
+        "test_videos": test_video_ids,
+        "usage": "Use /transcript?video_id=VIDEO_ID to test",
+        "tip": "Educational and historical content usually has higher success rates"
     })
 
 def process_transcript(video_id):
@@ -160,57 +275,99 @@ def process_transcript(video_id):
             if any(keyword in error_msg for keyword in ["blocked", "ip", "cloud provider", "requests from your ip"]):
                 print("Attempting to use proxy...")
                 
-                # Try up to 3 different proxies
-                for attempt in range(3):
-                    proxy = get_random_proxy()
-                    if not proxy:
-                        print("No proxies available")
-                        break
-                        
-                    print(f"Trying proxy {attempt + 1}/3: {proxy}")
+                # Get fresh proxy list
+                update_proxy_list()
+                
+                if not PROXY_LIST:
+                    print("No proxies available")
+                else:
+                    print(f"Available proxies: {len(PROXY_LIST)}")
                     
-                    # Test proxy first
-                    if not test_proxy(proxy):
-                        print(f"Proxy {proxy} is not working, trying next...")
-                        continue
-                    
-                    try:
-                        # YouTube Transcript API doesn't directly support proxies,
-                        # but we can modify the underlying requests session
-                        import requests
+                    # Try up to 5 different proxies with better selection
+                    successful_proxy = None
+                    for attempt in range(min(5, len(PROXY_LIST))):
+                        proxy = get_random_proxy()
+                        if not proxy:
+                            continue
+                            
+                        print(f"Trying proxy {attempt + 1}/5: {proxy}")
                         
-                        # Create a custom session with proxy
-                        session = requests.Session()
-                        session.proxies = {
-                            "http": f"http://{proxy}",
-                            "https": f"http://{proxy}"
-                        }
+                        # Test proxy with YouTube specifically
+                        if not test_proxy_with_youtube(proxy):
+                            print(f"Proxy {proxy} failed YouTube test, trying next...")
+                            continue
                         
-                        # Monkey patch the session (this is a workaround)
-                        original_get = requests.get
-                        def patched_get(*args, **kwargs):
-                            kwargs['proxies'] = session.proxies
-                            kwargs['timeout'] = 15
-                            return original_get(*args, **kwargs)
-                        
-                        requests.get = patched_get
-                        
-                        # Try with proxy
-                        ytt_api = YouTubeTranscriptApi()
-                        fetched_transcript = ytt_api.fetch(video_id)
-                        transcript_data = fetched_transcript.to_raw_data()
-                        
-                        # Restore original function
-                        requests.get = original_get
-                        
-                        print(f"Proxy {proxy} worked successfully!")
-                        break
-                        
-                    except Exception as proxy_error:
-                        print(f"Proxy {proxy} failed: {str(proxy_error)}")
-                        # Restore original function in case of error
-                        requests.get = original_get
-                        continue
+                        try:
+                            # Enhanced proxy implementation with better headers
+                            import requests
+                            
+                            # User agents for rotation
+                            user_agents = [
+                                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
+                            ]
+                            
+                            # Create a custom session with proxy and headers
+                            session = requests.Session()
+                            session.proxies = {
+                                "http": f"http://{proxy}",
+                                "https": f"http://{proxy}"
+                            }
+                            session.headers.update({
+                                'User-Agent': random.choice(user_agents),
+                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                                'Accept-Language': 'en-US,en;q=0.9',
+                                'Accept-Encoding': 'gzip, deflate',
+                                'Connection': 'keep-alive',
+                                'Upgrade-Insecure-Requests': '1',
+                            })
+                            
+                            # Monkey patch the session (enhanced)
+                            original_get = requests.get
+                            original_post = requests.post
+                            
+                            def patched_get(*args, **kwargs):
+                                kwargs['proxies'] = session.proxies
+                                kwargs['headers'] = {**session.headers, **kwargs.get('headers', {})}
+                                kwargs['timeout'] = 20
+                                return original_get(*args, **kwargs)
+                            
+                            def patched_post(*args, **kwargs):
+                                kwargs['proxies'] = session.proxies
+                                kwargs['headers'] = {**session.headers, **kwargs.get('headers', {})}
+                                kwargs['timeout'] = 20
+                                return original_post(*args, **kwargs)
+                            
+                            requests.get = patched_get
+                            requests.post = patched_post
+                            
+                            # Add small delay to avoid rate limiting
+                            time.sleep(random.uniform(1, 3))
+                            
+                            # Try with proxy
+                            ytt_api = YouTubeTranscriptApi()
+                            fetched_transcript = ytt_api.fetch(video_id)
+                            transcript_data = fetched_transcript.to_raw_data()
+                            
+                            # Restore original functions
+                            requests.get = original_get
+                            requests.post = original_post
+                            
+                            successful_proxy = proxy
+                            print(f"Proxy {proxy} worked successfully!")
+                            break
+                            
+                        except Exception as proxy_error:
+                            print(f"Proxy {proxy} failed during transcript fetch: {str(proxy_error)}")
+                            # Restore original functions in case of error
+                            try:
+                                requests.get = original_get
+                                requests.post = original_post
+                            except:
+                                pass
+                            continue
                 
                 # If all proxies failed
                 if transcript_data is None:
@@ -223,10 +380,12 @@ def process_transcript(video_id):
                             "Try testing with different video IDs",
                             "Some videos work better than others", 
                             "Wait 10-15 minutes and try again",
+                            "Try videos that are more popular or educational content",
                             "Consider using a VPS with residential IP instead of cloud hosting"
                         ],
                         "video_id": video_id,
-                        "proxy_attempts": "Tried multiple proxies but all failed"
+                        "proxy_attempts": f"Tried {min(5, len(PROXY_LIST))} proxies but all failed",
+                        "available_proxies": len(PROXY_LIST)
                     }, 503
             
             # Handle other types of errors
