@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: youtube-transcript-api
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: waitress-serve --port=8080 app:app
